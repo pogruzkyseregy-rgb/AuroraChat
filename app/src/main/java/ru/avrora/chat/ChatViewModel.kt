@@ -215,7 +215,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     // Сырые сообщения не удаляются никогда: сжатие только решает, что уходит в запрос целиком.
     // Эпизоды неизменяемы, ядро правится точечно, поэтому сжатие не накапливает потери.
 
-    private fun setMemory(m: MemoryData) {
+    private fun commitMemory(m: MemoryData) {
         memory = m
         memoryStore.save(m)
     }
@@ -228,12 +228,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             memory.core.map { if (it.id == id) it.copy(kind = kind, text = t) else it }
         }
-        setMemory(memory.copy(core = core))
+        commitMemory(memory.copy(core = core))
     }
 
-    fun deleteCore(id: String) = setMemory(memory.copy(core = memory.core.filter { it.id != id }))
+    fun deleteCore(id: String) = commitMemory(memory.copy(core = memory.core.filter { it.id != id }))
 
-    fun deleteEpisode(id: String) = setMemory(memory.copy(episodes = memory.episodes.filter { it.id != id }))
+    fun deleteEpisode(id: String) = commitMemory(memory.copy(episodes = memory.episodes.filter { it.id != id }))
 
     private fun backupMemory() {
         memoryStore.saveBackup(memory)
@@ -242,7 +242,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearMemory() {
         backupMemory()
-        setMemory(MemoryData(upTo = memory.upTo))
+        commitMemory(MemoryData(upTo = memory.upTo))
         notice = "Память очищена. Прежнюю можно вернуть"
     }
 
@@ -252,7 +252,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             notice = "Копии памяти нет"
             return
         }
-        setMemory(b)
+        commitMemory(b)
         notice = "Память возвращена"
     }
 
@@ -267,7 +267,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         backupMemory()
-        setMemory(MemoryData())
+        commitMemory(MemoryData())
         compress(keep = RAW_KEEP, threshold = RAW_KEEP, announce = true)
     }
 
@@ -293,7 +293,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (res.episode.isBlank()) throw IllegalStateException("пустой ответ модели")
                     val now = System.currentTimeMillis()
                     // Порция считается сжатой только после успешного ответа: при сбое ничего не теряется
-                    setMemory(
+                    commitMemory(
                         MemoryData(
                             core = applyOps(memory.core, res.ops, now),
                             episodes = memory.episodes +
@@ -362,7 +362,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             messages.clear()
             messages.addAll(msgs)
             persist()
-            setMemory(mem)
+            commitMemory(mem)
             notice = "Копия загружена: ${msgs.size} сообщений"
         } catch (e: Exception) {
             notice = "Не удалось прочитать копию"
