@@ -35,7 +35,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -61,6 +60,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 
+/** Стикер или фото из альбома, прикреплённые к черновику. Уходят вместе с текстом по кнопке отправки. */
+private data class Pending(val tag: String, val model: Any, val isSticker: Boolean)
+
 @Composable
 fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val ctx = LocalContext.current
@@ -68,16 +70,20 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val listState = rememberLazyListState()
 
     var input by rememberSaveable { mutableStateOf("") }
-    var showSettings by remember { mutableStateOf(vm.token.isBlank()) }
+    var screen by remember { mutableStateOf(if (vm.token.isBlank()) Screen.Connection else Screen.Chat) }
     var showPanel by remember { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<Any?>(null) }
     var pendingSnap by remember { mutableStateOf<Uri?>(null) }
+    var pending by remember { mutableStateOf<Pending?>(null) }
     var addingSticker by remember { mutableStateOf(true) }
     var addUri by remember { mutableStateOf<Uri?>(null) }
     var toDelete by remember { mutableStateOf<CatalogItem?>(null) }
 
     val pickSnap = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) pendingSnap = uri
+        if (uri != null) {
+            pendingSnap = uri
+            pending = null
+        }
     }
     val pickForLibrary = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) addUri = uri
@@ -98,13 +104,22 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     }
 
     BackHandler(enabled = showPanel) { showPanel = false }
+    BackHandler(enabled = screen != Screen.Chat) {
+        screen = if (screen == Screen.Menu) Screen.Chat else Screen.Menu
+    }
 
-    val canSend = !vm.sending && (input.isNotBlank() || pendingSnap != null)
+    val canSend = !vm.sending && (input.isNotBlank() || pendingSnap != null || pending != null)
     fun submit() {
         val snap = pendingSnap
-        if (snap != null) vm.sendSnap(snap, input) else vm.send(input)
+        val att = pending
+        when {
+            snap != null -> vm.sendSnap(snap, input)
+            att != null -> vm.sendWithTag(input, att.tag)
+            else -> vm.send(input)
+        }
         input = ""
         pendingSnap = null
+        pending = null
     }
 
     Box(Modifier.fillMaxSize().background(Night)) {
@@ -116,7 +131,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         )
 
         Column(Modifier.fillMaxSize()) {
-            Header(sending = vm.sending, onSettings = { showSettings = true })
+            Header(sending = vm.sending, onSettings = { screen = Screen.Menu })
 
             LazyColumn(
                 state = listState,
@@ -149,26 +164,29 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 }
             }
 
-            pendingSnap?.let { uri ->
+            val chipModel: Any? = pendingSnap ?: pending?.model
+            if (chipModel != null) {
+                val isSticker = pending?.isSticker == true
                 Row(
                     Modifier.fillMaxWidth().background(Panel).padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     AsyncImage(
-                        model = uri,
+                        model = chipModel,
                         contentDescription = null,
-                        contentScale = ContentScale.Crop,
+                        contentScale = if (isSticker) ContentScale.Fit else ContentScale.Crop,
                         modifier = Modifier.size(56.dp).clip(RoundedCornerShape(10.dp))
                     )
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        "Фото готово. Можно добавить подпись.",
+                        if (isSticker) "Стикер прикреплён. Напиши сообщение или сразу отправь."
+                        else "Фото прикреплено. Можно добавить подпись.",
                         color = TextDim,
                         fontSize = 13.sp,
                         modifier = Modifier.weight(1f)
                     )
-                    IconButton(onClick = { pendingSnap = null }) {
-                        Icon(Icons.Default.Close, contentDescription = "Убрать фото", tint = TextDim)
+                    IconButton(onClick = { pendingSnap = null; pending = null }) {
+                        Icon(Icons.Default.Close, contentDescription = "Убрать вложение", tint = TextDim)
                     }
                 }
             }
@@ -199,15 +217,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                     placeholder = { Text("Написать Авроре…") },
                     maxLines = 5,
                     shape = RoundedCornerShape(20.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = TextMain,
-                        unfocusedTextColor = TextMain,
-                        cursorColor = Glow,
-                        focusedBorderColor = Glow.copy(alpha = 0.6f),
-                        unfocusedBorderColor = Edge,
-                        focusedPlaceholderColor = TextDim,
-                        unfocusedPlaceholderColor = TextDim
-                    )
+                    colors = auroraFieldColors()
                 )
                 Spacer(Modifier.width(6.dp))
                 Box(
@@ -231,8 +241,16 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 LibraryPanel(
                     stickers = vm.stickers,
                     photos = vm.photos,
-                    onSticker = { vm.sendSticker(it); showPanel = false },
-                    onPhoto = { vm.sendPhoto(it); showPanel = false },
+                    onSticker = {
+                        pending = Pending("[стикер:${it.id}]", it.model, true)
+                        pendingSnap = null
+                        showPanel = false
+                    },
+                    onPhoto = {
+                        pending = Pending("[фото:${it.id}]", it.model, false)
+                        pendingSnap = null
+                        showPanel = false
+                    },
                     onAddSticker = {
                         addingSticker = true
                         pickForLibrary.launch(imageOnly)
@@ -245,9 +263,11 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 )
             }
         }
-    }
 
-    if (showSettings) SettingsDialog(vm) { showSettings = false }
+        if (screen != Screen.Chat) {
+            SettingsHost(vm = vm, screen = screen, onNavigate = { screen = it })
+        }
+    }
 
     val newUri = addUri
     if (newUri != null) {

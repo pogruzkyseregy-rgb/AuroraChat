@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,42 +28,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-
-@Composable
-fun SettingsDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
-    var url by remember { mutableStateOf(vm.serverUrl) }
-    var token by remember { mutableStateOf(vm.token) }
-    var confirmClear by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Panel,
-        title = { Text("Подключение") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(url, { url = it }, label = { Text("Адрес сервера") }, singleLine = true)
-                OutlinedTextField(token, { token = it }, label = { Text("Токен приложения") }, singleLine = true)
-                TextButton(onClick = {
-                    if (confirmClear) {
-                        vm.clearChat()
-                        confirmClear = false
-                    } else {
-                        confirmClear = true
-                    }
-                }) {
-                    Text(
-                        if (confirmClear) "Точно стереть всю переписку?" else "Стереть переписку",
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { vm.saveSettings(url, token); onDismiss() }) { Text("Сохранить") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
-    )
-}
 
 /** Добавление своего стикера или фото в общую библиотеку. Описание нужно, чтобы Аврора понимала, когда это отправлять. */
 @Composable

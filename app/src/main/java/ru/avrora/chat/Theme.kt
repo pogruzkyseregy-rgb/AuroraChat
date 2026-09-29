@@ -1,6 +1,9 @@
 package ru.avrora.chat
 
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 // Палитра «флюоритовая ночь»: тёмный индиго, холодное голубое свечение.
@@ -25,4 +28,17 @@ val AuroraColors = darkColorScheme(
     primaryContainer = BubbleUser,
     onPrimaryContainer = TextMain,
     error = Color(0xFFFF9A9A)
+)
+
+@Composable
+fun auroraFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = TextMain,
+    unfocusedTextColor = TextMain,
+    cursorColor = Glow,
+    focusedBorderColor = Glow.copy(alpha = 0.6f),
+    unfocusedBorderColor = Edge,
+    focusedPlaceholderColor = TextDim,
+    unfocusedPlaceholderColor = TextDim,
+    focusedLabelColor = Glow,
+    unfocusedLabelColor = TextDim
 )
