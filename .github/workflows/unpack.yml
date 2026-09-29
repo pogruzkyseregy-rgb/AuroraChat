@@ -8,12 +8,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          unzip -o aurora-chat-stage1.zip
+          Z=$(ls -1 *.zip | head -n1)
+          unzip -o "$Z"
           rm -rf AuroraChat/.github
           cp -r AuroraChat/. .
-          rm -rf AuroraChat aurora-relay README.md aurora-chat-stage1.zip
+          rm -rf AuroraChat aurora-relay README.md "$Z"
           git config user.name "unpack"
           git config user.email "unpack@example.com"
           git add -A
-          git commit -m "Unpack project"
+          git commit -m "Update from $Z"
           git push
