@@ -4,7 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val keystore = file("aurora.jks")
+// Постоянный ключ подписи. Подходит и aurora.jks, и aurora-debug.jks (ключ плеера).
+val keystore = listOf("aurora.jks", "aurora-debug.jks").map { file(it) }.firstOrNull { it.exists() }
 
 android {
     namespace = "ru.avrora.chat"
@@ -14,15 +15,13 @@ android {
         applicationId = "ru.avrora.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
     }
 
-    // Постоянная подпись: без неё каждая сборка из Actions подписана новым ключом,
-    // и обновление поверх старой версии не встанет (а удаление сотрёт переписку).
     signingConfigs {
         create("aurora") {
-            if (keystore.exists()) {
+            if (keystore != null) {
                 storeFile = keystore
                 storePassword = System.getenv("KS_PASS")
                 keyAlias = System.getenv("KS_ALIAS")
@@ -33,7 +32,7 @@ android {
 
     buildTypes {
         debug {
-            if (keystore.exists()) signingConfig = signingConfigs.getByName("aurora")
+            if (keystore != null) signingConfig = signingConfigs.getByName("aurora")
         }
         release { isMinifyEnabled = false }
     }
@@ -55,6 +54,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
+    implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
