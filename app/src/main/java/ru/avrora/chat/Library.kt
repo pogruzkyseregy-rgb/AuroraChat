@@ -6,8 +6,10 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 
 /** Стикер или фото из общей библиотеки. model: строка asset-адреса или File. */
@@ -296,4 +298,27 @@ fun imageAspect(file: File): Float {
     val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.path, o)
     return if (o.outWidth > 0 && o.outHeight > 0) o.outWidth.toFloat() / o.outHeight.toFloat() else 0.75f
+}
+
+/**
+ * Фото для модели: уменьшенный JPEG в base64. Перекодирование стирает служебные данные (геометки и т.п.).
+ * Если получается слишком тяжело, качество снижается ступенями.
+ */
+fun encodeForModel(file: File, maxSide: Int = 896): String? {
+    if (!file.exists()) return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.path, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    val bmp = BitmapFactory.decodeFile(file.path, opts) ?: return null
+    val scaled = fitBitmap(bmp, maxSide)
+    for (q in intArrayOf(78, 62, 48)) {
+        val out = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, q, out)
+        val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        if (b64.length <= 420_000 || q == 48) return b64
+    }
+    return null
 }

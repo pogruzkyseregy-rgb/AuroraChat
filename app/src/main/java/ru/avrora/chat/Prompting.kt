@@ -1,7 +1,12 @@
 package ru.avrora.chat
 
 /** Мои вложения для модели превращаются в понятный текст. Собственные теги Авроры остаются как есть. */
-fun describeForModel(text: String, stickers: List<CatalogItem>, photos: List<CatalogItem>): String =
+fun describeForModel(
+    text: String,
+    stickers: List<CatalogItem>,
+    photos: List<CatalogItem>,
+    attachedSnaps: Set<String> = emptySet()
+): String =
     TAG_RE.replace(text) { mr ->
         val id = mr.groupValues[2]
         when (mr.groupValues[1]) {
@@ -13,7 +18,11 @@ fun describeForModel(text: String, stickers: List<CatalogItem>, photos: List<Cat
                 val d = photos.firstOrNull { it.id == id }?.desc
                 if (d != null) "[Адонис отправил фото из альбома: $d]" else "[Адонис отправил фото из альбома]"
             }
-            else -> "[Адонис прислал фото. Что на нём, ты не видишь: ориентируйся на подпись и контекст.]"
+            else -> if (id in attachedSnaps) {
+                "[Адонис прислал фото, оно приложено к этому сообщению, ты его видишь]"
+            } else {
+                "[Адонис прислал фото (сейчас оно тебе не показано)]"
+            }
         }
     }.trim()
 

@@ -371,6 +371,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- запрос к серверу ----------
 
+    /**
+     * Фото, которые Аврора должна увидеть: последние два из недавних шести сообщений.
+     * Возвращает (позиция в истории, имя файла, base64). Остальные фото остаются подписью.
+     */
+    private suspend fun attachSnaps(history: List<ChatMessage>): List<Triple<Int, String, String>> =
+        withContext(Dispatchers.IO) {
+            val out = ArrayList<Triple<Int, String, String>>()
+            val first = maxOf(0, history.size - 6)
+            for (i in history.indices.reversed()) {
+                if (i < first || out.size >= 2) break
+                val m = history[i]
+                if (m.role != "user") continue
+                val snap = parseParts(m.content).filterIsInstance<Part.Snap>().firstOrNull() ?: continue
+                val b64 = encodeForModel(File(library.sentDir, snap.file)) ?: continue
+                out.add(Triple(i, snap.file, b64))
+            }
+            out
+        }
+
     private fun requestReply() {
         if (token.isBlank()) {
             error = "Укажи токен в настройках"
@@ -380,17 +399,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         error = null
         val st = stickers.toList()
         val ph = photos.toList()
-        val history = messages
+        val raw = messages
             .filter { it.time > memory.upTo }
             .takeLast(HISTORY)
-            .map { if (it.role == "user") it.copy(content = describeForModel(it.content, st, ph)) else it }
         val recentUser = messages.filter { it.role == "user" }.takeLast(3)
             .joinToString(" ") { TAG_RE.replace(it.content, " ") }
         val mem = MemoryContext.build(memory, recentUser)
         val per = persona.compile()
         viewModelScope.launch {
             try {
-                val reply = AuroraApi.chat(serverUrl, token, history, st, ph, mem, per)
+                val snaps = attachSnaps(raw)
+                val attached = snaps.map { it.second }.toSet()
+                val history = raw.map {
+                    if (it.role == "user") it.copy(content = describeForModel(it.content, st, ph, attached)) else it
+                }
+                val images = snaps.map { Pair(it.first, it.third) }
+                val reply = AuroraApi.chat(serverUrl, token, history, st, ph, mem, per, images)
                 messages.add(ChatMessage("assistant", reply))
                 persist()
                 compress(keep = RAW_KEEP, threshold = TRIGGER, announce = false)

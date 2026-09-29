@@ -58,14 +58,18 @@ object AuroraApi {
         stickers: List<CatalogItem>,
         photos: List<CatalogItem>,
         memory: String,
-        persona: String
+        persona: String,
+        images: List<Pair<Int, String>> = emptyList()
     ): String {
+        val imgs = JSONArray()
+        images.forEach { imgs.put(JSONObject().put("i", it.first).put("data", it.second)) }
         val body = JSONObject()
             .put("messages", historyJson(history))
             .put("memory", memory)
             .put("persona", persona)
             .put("stickers", catalogJson(stickers))
             .put("photos", catalogJson(photos))
+            .put("images", imgs)
         return post(baseUrl, "/chat", token, body).getString("reply")
     }
 
