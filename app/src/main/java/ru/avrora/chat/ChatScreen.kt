@@ -148,6 +148,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                         stickers = vm.stickers,
                         photos = vm.photos,
                         sentDir = vm.library.sentDir,
+                        revealing = m.time == vm.revealTime,
                         onOpen = { viewer = it }
                     )
                 }

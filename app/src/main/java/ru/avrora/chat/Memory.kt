@@ -118,3 +118,27 @@ fun parseTranscript(text: String): List<Pair<String, String>> {
     }
     return out
 }
+
+/** Короткое описание предложения для журнала и экрана памяти. */
+fun proposalSummary(p: Proposal): String {
+    val what = when (p.op) {
+        "add" -> "добавить"
+        "update" -> "изменить"
+        "remove" -> "удалить"
+        else -> p.op
+    }
+    return "$what [${p.kind}] ${p.text}".take(180)
+}
+
+/** Применение предложения к ядру. direct=false пускает правку от сжатия через защитные правила; после её «да» вызывается с direct=true. */
+fun applyProposal(core: List<CoreEntry>, p: Proposal, text: String, now: Long, direct: Boolean): List<CoreEntry> {
+    if (!direct && p.source == "summary") {
+        return applyOps(core, listOf(MemOp(p.op, p.targetId, p.kind, text)), now)
+    }
+    return when (p.op) {
+        "add" -> core + CoreEntry(newId("c"), p.kind, text, now)
+        "update" -> core.map { if (it.id == p.targetId) it.copy(kind = p.kind, text = text) else it }
+        "remove" -> core.filter { it.id != p.targetId }
+        else -> core
+    }
+}

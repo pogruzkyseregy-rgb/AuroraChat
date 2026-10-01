@@ -96,10 +96,35 @@ data class InitSettings(
 
 data class CoreEntry(val id: String, val kind: String, val text: String, val at: Long)
 data class Episode(val id: String, val from: Long, val to: Long, val text: String)
+/** Предложенная правка ядра. Попадает в ядро только после её «да». */
+data class Proposal(
+    val id: String,
+    val op: String,          // add / update / remove
+    val targetId: String,    // для update и remove
+    val kind: String,
+    val text: String,
+    val source: String,      // summary (при сжатии) / adonis (вручную)
+    val episode: String,     // эпизод, из которого предложено
+    val at: Long
+)
+
+/** Запись журнала: её решение или заметка о том, что Адонис сделал с памятью. */
+data class Decision(
+    val at: Long,
+    val verdict: String,     // yes / no / edit / notice
+    val why: String,
+    val summary: String,
+    val source: String,
+    val overridden: Boolean = false,
+    val proposal: Proposal? = null   // для «нет»: чтобы можно было записать вопреки
+)
+
 data class MemoryData(
     val core: List<CoreEntry> = emptyList(),
     val episodes: List<Episode> = emptyList(),
-    val upTo: Long = 0L      // время последнего сообщения, попавшего в эпизод
+    val upTo: Long = 0L,     // время последнего сообщения, попавшего в эпизод
+    val pending: List<Proposal> = emptyList(),   // ждут её «да»
+    val log: List<Decision> = emptyList()        // что она решила и что делал Адонис
 )
 
 val CORE_KINDS = listOf("язык", "поворот", "тон", "планы", "адонис")
@@ -113,7 +138,39 @@ fun memoryToJson(m: MemoryData): JSONObject {
     m.episodes.forEach {
         eps.put(JSONObject().put("id", it.id).put("from", it.from).put("to", it.to).put("text", it.text))
     }
+    val pend = JSONArray()
+    m.pending.forEach { pend.put(proposalToJson(it)) }
+    val log = JSONArray()
+    m.log.forEach { log.put(decisionToJson(it)) }
     return JSONObject().put("version", 2).put("upTo", m.upTo).put("core", core).put("episodes", eps)
+        .put("pending", pend).put("log", log)
+}
+
+fun proposalToJson(p: Proposal): JSONObject = JSONObject()
+    .put("id", p.id).put("op", p.op).put("target", p.targetId).put("kind", p.kind)
+    .put("text", p.text).put("source", p.source).put("episode", p.episode).put("at", p.at)
+
+fun proposalFromJson(e: JSONObject): Proposal = Proposal(
+    e.getString("id"), e.getString("op"), e.optString("target", ""), e.optString("kind", ""),
+    e.optString("text", ""), e.optString("source", "summary"), e.optString("episode", ""), e.optLong("at")
+)
+
+fun decisionToJson(d: Decision): JSONObject {
+    val o = JSONObject()
+        .put("at", d.at).put("verdict", d.verdict).put("why", d.why).put("summary", d.summary)
+        .put("source", d.source).put("overridden", d.overridden)
+    val prop = d.proposal
+    if (prop != null) o.put("proposal", proposalToJson(prop))
+    return o
+}
+
+fun decisionFromJson(e: JSONObject): Decision {
+    val po = e.optJSONObject("proposal")
+    return Decision(
+        e.optLong("at"), e.optString("verdict", "notice"), e.optString("why", ""),
+        e.optString("summary", ""), e.optString("source", ""), e.optBoolean("overridden", false),
+        if (po == null) null else proposalFromJson(po)
+    )
 }
 
 fun memoryFromJson(o: JSONObject): MemoryData {
@@ -127,7 +184,15 @@ fun memoryFromJson(o: JSONObject): MemoryData {
         val e = epsArr.getJSONObject(i)
         Episode(e.getString("id"), e.optLong("from"), e.optLong("to"), e.getString("text"))
     }
-    return MemoryData(core, eps, o.optLong("upTo", 0L))
+    val pendArr = o.optJSONArray("pending")
+    val pend = if (pendArr == null) emptyList<Proposal>() else (0 until pendArr.length()).map { i ->
+        proposalFromJson(pendArr.getJSONObject(i))
+    }
+    val logArr = o.optJSONArray("log")
+    val log = if (logArr == null) emptyList<Decision>() else (0 until logArr.length()).map { i ->
+        decisionFromJson(logArr.getJSONObject(i))
+    }
+    return MemoryData(core, eps, o.optLong("upTo", 0L), pend, log)
 }
 
 class MemoryStore(ctx: Context) {
@@ -236,6 +301,11 @@ class AppPrefs(ctx: Context) {
             .putInt("init_quiet_to", s.quietTo)
             .apply()
     }
+
+    /** Список ограничений, который Аврора видела в последний раз: по нему считаем «что изменилось». */
+    var limitsPrev: String?
+        get() = p.getString("limits_prev", null)
+        set(v) { p.edit().putString("limits_prev", v).apply() }
 
     // Учёт инициативы: когда писала последний раз, сколько сообщений подряд без ответа и т.п.
     var initLastAt: Long

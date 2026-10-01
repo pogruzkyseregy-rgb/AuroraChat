@@ -24,24 +24,37 @@ data class CatalogItem(
 /** Теги во вложениях: [стикер:id], [фото:id], [снимок:файл]. */
 val TAG_RE = Regex("""\[(стикер|фото|снимок|sticker|photo)\s*:\s*([A-Za-z0-9_.\-]+)\s*\]""")
 
+/** Её маркеры: [пауза], [пауза:N] (секунды) и [молчу]. */
+val PAUSE_RE = Regex("""\[пауза(?:\s*:\s*(\d{1,2}))?\s*\]""", RegexOption.IGNORE_CASE)
+val SILENCE_RE = Regex("""\[молчу\s*\]""", RegexOption.IGNORE_CASE)
+private val ALL_RE = Regex(
+    """\[(?:(стикер|фото|снимок|sticker|photo)\s*:\s*([A-Za-z0-9_.\-]+)|пауза(?:\s*:\s*(\d{1,2}))?)\s*\]""",
+    RegexOption.IGNORE_CASE
+)
+
 sealed class Part {
     data class Text(val s: String) : Part()
     data class Sticker(val id: String) : Part()
     data class Photo(val id: String) : Part()
     data class Snap(val file: String) : Part()
+    data class Pause(val seconds: Int) : Part()
+    object Silence : Part()
 }
 
 fun parseParts(content: String): List<Part> {
+    // Если она ответила [молчу], остального текста не показываем: это решение промолчать
+    if (SILENCE_RE.containsMatchIn(content)) return listOf(Part.Silence)
     val out = ArrayList<Part>()
     var last = 0
-    for (m in TAG_RE.findAll(content)) {
+    for (m in ALL_RE.findAll(content)) {
         val before = content.substring(last, m.range.first).trim()
         if (before.isNotEmpty()) out.add(Part.Text(before))
-        val id = m.groupValues[2]
-        when (m.groupValues[1]) {
-            "стикер", "sticker" -> out.add(Part.Sticker(id))
-            "фото", "photo" -> out.add(Part.Photo(id))
-            else -> out.add(Part.Snap(id))
+        val kind = m.groupValues[1].lowercase()
+        when {
+            kind == "стикер" || kind == "sticker" -> out.add(Part.Sticker(m.groupValues[2]))
+            kind == "фото" || kind == "photo" -> out.add(Part.Photo(m.groupValues[2]))
+            kind == "снимок" -> out.add(Part.Snap(m.groupValues[2]))
+            else -> out.add(Part.Pause((m.groupValues[3].toIntOrNull() ?: 2).coerceIn(1, 8)))
         }
         last = m.range.last + 1
     }

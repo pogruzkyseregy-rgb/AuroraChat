@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -47,6 +48,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var hasMemoryBackup by mutableStateOf(memoryStore.hasBackup())
         private set
+    var consenting by mutableStateOf(false)
+        private set
+    var revealTime by mutableStateOf(0L)
+        private set
     var probing by mutableStateOf(false)
         private set
     var probeResult by mutableStateOf<String?>(null)
@@ -61,6 +66,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         photos.addAll(bp + up)
 
         drainInbox()
+        resolvePending()
         InitiativeScheduler.apply(app, initSettings.enabled)
         viewModelScope.launch { InboxBus.flow.collect { drainInbox() } }
     }
@@ -155,6 +161,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun addUserMessage(content: String) {
+        revealTime = 0L
         messages.add(ChatMessage("user", content))
         noteUserActivity()
         persist()
@@ -220,20 +227,122 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         memoryStore.save(m)
     }
 
+    private fun note(text: String) = Decision(System.currentTimeMillis(), "notice", "", text, "adonis")
+
+    /** Ручная правка ядра: сначала идёт к Авроре, в ядро попадает только после её «да». */
     fun saveCore(id: String?, kind: String, text: String) {
         val t = text.trim()
         if (t.isEmpty()) return
-        val core = if (id == null) {
-            memory.core + CoreEntry(newId("c"), kind, t, System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val p = if (id == null) {
+            Proposal(newId("p"), "add", "", kind, t, "adonis", "", now)
         } else {
-            memory.core.map { if (it.id == id) it.copy(kind = kind, text = t) else it }
+            Proposal(newId("p"), "update", id, kind, t, "adonis", "", now)
         }
-        commitMemory(memory.copy(core = core))
+        submit(listOf(p))
     }
 
-    fun deleteCore(id: String) = commitMemory(memory.copy(core = memory.core.filter { it.id != id }))
+    fun deleteCore(id: String) {
+        val e = memory.core.firstOrNull { it.id == id } ?: return
+        submit(listOf(Proposal(newId("p"), "remove", id, e.kind, e.text, "adonis", "", System.currentTimeMillis())))
+    }
 
-    fun deleteEpisode(id: String) = commitMemory(memory.copy(episodes = memory.episodes.filter { it.id != id }))
+    fun deleteEpisode(id: String) =
+        commitMemory(
+            memory.copy(
+                episodes = memory.episodes.filter { it.id != id },
+                log = (memory.log + note("Адонис удалил один из эпизодов твоей памяти")).takeLast(100)
+            )
+        )
+
+    private fun submit(list: List<Proposal>) {
+        if (list.isEmpty()) return
+        commitMemory(memory.copy(pending = memory.pending + list))
+        resolvePending(announce = true)
+    }
+
+    /** Спросить Аврору про всё, что ждёт её «да». Если ответа нет, пункты остаются в очереди и ничего не записывается. */
+    fun resolvePending(announce: Boolean = false) {
+        if (consenting || memory.pending.isEmpty()) return
+        val t0 = System.currentTimeMillis()
+        viewModelScope.launch {
+            val done = try {
+                drainConsent()
+            } catch (e: Exception) {
+                false
+            }
+            if (announce) {
+                val fresh = memory.log.filter { it.at >= t0 && it.verdict != "notice" }
+                val no = fresh.firstOrNull { it.verdict == "no" }
+                notice = when {
+                    fresh.isEmpty() -> "Аврора пока не ответила: запись ждёт её «да»"
+                    no != null -> "Аврора против: " + no.why.ifBlank { "без объяснения" }.take(120)
+                    fresh.any { it.verdict == "edit" } -> "Аврора записала это по-своему"
+                    done -> "Аврора: да"
+                    else -> "Часть записей ждёт её «да»"
+                }
+            }
+        }
+    }
+
+    private suspend fun drainConsent(): Boolean {
+        if (consenting) return false
+        consenting = true
+        try {
+            var guard = 0
+            while (memory.pending.isNotEmpty() && guard < 6) {
+                guard += 1
+                if (!consentRound()) break
+            }
+        } finally {
+            consenting = false
+        }
+        return memory.pending.isEmpty()
+    }
+
+    /** Один запрос к Авроре, до 8 пунктов. true, если по какому-то пункту получено решение. */
+    private suspend fun consentRound(): Boolean {
+        val batch = memory.pending.take(8)
+        val episode = batch.firstOrNull { it.episode.isNotBlank() }?.episode ?: ""
+        val decisions = AuroraApi.consent(serverUrl, token, memory.core, batch, episode)
+        // Память читаем после ответа: за время запроса могли добавиться эпизоды
+        var core = memory.core
+        var pending = memory.pending
+        val log = ArrayList(memory.log)
+        var applied = false
+        val now = System.currentTimeMillis()
+        for (d in decisions) {
+            val p = batch.getOrNull(d.n) ?: continue
+            if (pending.none { it.id == p.id }) continue
+            pending = pending.filter { it.id != p.id }
+            applied = true
+            when (d.verdict) {
+                "yes" -> {
+                    core = applyProposal(core, p, p.text, now, true)
+                    log.add(Decision(now, "yes", d.why, proposalSummary(p), p.source))
+                }
+                "edit" -> {
+                    val t = d.text.ifBlank { p.text }
+                    core = applyProposal(core, p, t, now, true)
+                    log.add(Decision(now, "edit", d.why, proposalSummary(p.copy(text = t)), p.source))
+                }
+                else -> log.add(Decision(now, "no", d.why, proposalSummary(p), p.source, false, p))
+            }
+        }
+        if (applied) commitMemory(memory.copy(core = core, pending = pending, log = log.takeLast(100)))
+        return applied
+    }
+
+    /** «Всё равно записать» вопреки её «нет». Это остаётся в журнале, и она узнает об этом. */
+    fun overrideDecision(proposalId: String) {
+        val d = memory.log.firstOrNull { it.proposal?.id == proposalId && it.verdict == "no" && !it.overridden } ?: return
+        val p = d.proposal ?: return
+        val now = System.currentTimeMillis()
+        val core = applyProposal(memory.core, p, p.text, now, true)
+        val log = memory.log.map { if (it === d) it.copy(overridden = true, at = now) else it }
+        commitMemory(memory.copy(core = core, log = log))
+        notice = "Записано вопреки её «нет». Она об этом узнает"
+    }
 
     private fun backupMemory() {
         memoryStore.saveBackup(memory)
@@ -242,7 +351,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearMemory() {
         backupMemory()
-        commitMemory(MemoryData(upTo = memory.upTo))
+        commitMemory(
+            MemoryData(
+                upTo = memory.upTo,
+                log = (memory.log + note("Адонис очистил твою память, прежняя сохранена")).takeLast(100)
+            )
+        )
         notice = "Память очищена. Прежнюю можно вернуть"
     }
 
@@ -252,7 +366,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             notice = "Копии памяти нет"
             return
         }
-        commitMemory(b)
+        commitMemory(b.copy(log = (b.log + note("Адонис вернул прежнюю версию твоей памяти")).takeLast(100)))
         notice = "Память возвращена"
     }
 
@@ -267,7 +381,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         backupMemory()
-        commitMemory(MemoryData())
+        commitMemory(MemoryData(log = (memory.log + note("Адонис пересобрал твою память из переписки, прежняя сохранена")).takeLast(100)))
         compress(keep = RAW_KEEP, threshold = RAW_KEEP, announce = true)
     }
 
@@ -292,15 +406,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     val res = AuroraApi.compressMemory(serverUrl, token, memory.core, plain)
                     if (res.episode.isBlank()) throw IllegalStateException("пустой ответ модели")
                     val now = System.currentTimeMillis()
-                    // Порция считается сжатой только после успешного ответа: при сбое ничего не теряется
+                    val proposals = res.ops.map {
+                        Proposal(newId("p"), it.op, it.id, it.kind, it.text, "summary", res.episode, now)
+                    }
+                    // Порция считается сжатой только после успешного ответа: при сбое ничего не теряется.
+                    // Эпизод записывается сразу, а правки ядра ждут её «да».
                     commitMemory(
-                        MemoryData(
-                            core = applyOps(memory.core, res.ops, now),
+                        memory.copy(
                             episodes = memory.episodes +
                                 Episode(newId("e"), batch.first().time, batch.last().time, res.episode),
-                            upTo = batch.last().time
+                            upTo = batch.last().time,
+                            pending = memory.pending + proposals
                         )
                     )
+                    try {
+                        drainConsent()
+                    } catch (e: Exception) {
+                        // нет ответа: правки остаются в очереди, ничего не записано молча
+                    }
                 }
                 if (announce) notice = "Память обновлена"
             } catch (e: Exception) {
@@ -362,7 +485,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             messages.clear()
             messages.addAll(msgs)
             persist()
-            commitMemory(mem)
+            commitMemory(mem.copy(log = (mem.log + note("Адонис загрузил копию переписки и памяти из файла")).takeLast(100)))
             notice = "Копия загружена: ${msgs.size} сообщений"
         } catch (e: Exception) {
             notice = "Не удалось прочитать копию"
@@ -406,6 +529,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             .joinToString(" ") { TAG_RE.replace(it.content, " ") }
         val mem = MemoryContext.build(memory, recentUser)
         val per = persona.compile()
+        val limits = limitLines(prefs, memory)
+        val changed = limitsChanged(prefs.limitsPrev, limits)
         viewModelScope.launch {
             try {
                 val snaps = attachSnaps(raw)
@@ -414,9 +539,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (it.role == "user") it.copy(content = describeForModel(it.content, st, ph, attached)) else it
                 }
                 val images = snaps.map { Pair(it.first, it.third) }
-                val reply = AuroraApi.chat(serverUrl, token, history, st, ph, mem, per, images)
-                messages.add(ChatMessage("assistant", reply))
+                val reply = AuroraApi.chat(serverUrl, token, history, st, ph, mem, per, images, limits, changed)
+                val answer = ChatMessage("assistant", reply)
+                messages.add(answer)
                 persist()
+                prefs.limitsPrev = limits.joinToString("\n")   // теперь она знает этот список
+                // Паузы: части показываются по очереди. Где пауза и на сколько, решает она, мы только ждём
+                val pauseTotal = parseParts(reply).filterIsInstance<Part.Pause>().sumOf { it.seconds }
+                if (pauseTotal > 0) {
+                    revealTime = answer.time
+                    viewModelScope.launch {
+                        delay((pauseTotal + 2) * 1000L)
+                        if (revealTime == answer.time) revealTime = 0L
+                    }
+                }
+                resolvePending()
                 compress(keep = RAW_KEEP, threshold = TRIGGER, announce = false)
             } catch (e: Exception) {
                 error = e.message ?: "Нет связи с сервером"

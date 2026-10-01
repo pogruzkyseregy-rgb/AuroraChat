@@ -27,6 +27,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -34,10 +37,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -118,10 +123,25 @@ fun MessageRow(
     stickers: List<CatalogItem>,
     photos: List<CatalogItem>,
     sentDir: File,
+    revealing: Boolean,
     onOpen: (Any) -> Unit
 ) {
     val mine = m.role == "user"
     val parts = remember(m.content) { parseParts(m.content) }
+    // Её паузы: части идут по очереди, только пока сообщение свежее. Где пауза и на сколько, решила она
+    val steps = remember(parts) { splitSteps(parts) }
+    var visible by remember(m.time) { mutableIntStateOf(if (revealing) 1 else steps.size) }
+    LaunchedEffect(m.time, revealing) {
+        if (revealing) {
+            while (visible < steps.size) {
+                delay(steps[visible].first)
+                visible += 1
+            }
+        } else {
+            visible = steps.size
+        }
+    }
+    val shown = steps.take(visible).flatMap { it.second }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -136,9 +156,17 @@ fun MessageRow(
             horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            parts.forEach { p ->
+            shown.forEach { p ->
                 when (p) {
                     is Part.Text -> TextBubble(p.s, mine)
+                    is Part.Pause -> {}
+                    is Part.Silence -> Text(
+                        "Аврора прочитала и промолчала",
+                        color = TextDim,
+                        fontSize = 13.sp,
+                        fontStyle = FontStyle.Italic,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                    )
                     is Part.Sticker -> {
                         val item = stickers.firstOrNull { s -> s.id == p.id }
                         if (item != null) {
@@ -173,6 +201,26 @@ fun MessageRow(
             }
         }
     }
+}
+
+/** Делит части сообщения по её паузам: (задержка перед группой в мс, части группы). */
+private fun splitSteps(parts: List<Part>): List<Pair<Long, List<Part>>> {
+    val steps = ArrayList<Pair<Long, List<Part>>>()
+    var cur = ArrayList<Part>()
+    var delayMs = 0L
+    for (p in parts) {
+        if (p is Part.Pause) {
+            if (cur.isNotEmpty()) {
+                steps.add(Pair(delayMs, cur))
+                cur = ArrayList()
+            }
+            delayMs = p.seconds * 1000L
+        } else {
+            cur.add(p)
+        }
+    }
+    if (cur.isNotEmpty()) steps.add(Pair(delayMs, cur))
+    return steps
 }
 
 @Composable

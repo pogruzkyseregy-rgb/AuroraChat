@@ -427,6 +427,55 @@ private fun CoreEditDialog(
 }
 
 @Composable
+private fun DecisionRow(d: Decision, onOverride: (String) -> Unit) {
+    var confirm by remember { mutableStateOf(false) }
+    val fmt = remember { SimpleDateFormat("d MMM, HH:mm", Locale("ru")) }
+    val label = when (d.verdict) {
+        "yes" -> "ДА"
+        "edit" -> "ПРАВКА"
+        "no" -> if (d.overridden) "НЕТ, записано вопреки" else "НЕТ"
+        else -> "ЗАМЕТКА"
+    }
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text("$label · ${fmt.format(Date(d.at))}", color = if (d.verdict == "no") MaterialTheme.colorScheme.error else Glow, fontSize = 12.sp)
+        Text(d.summary, color = TextMain, fontSize = 14.sp, lineHeight = 20.sp)
+        if (d.why.isNotBlank()) Text("Она: " + d.why, color = TextDim, fontSize = 13.sp, lineHeight = 18.sp)
+        val pid = d.proposal?.id
+        if (d.verdict == "no" && !d.overridden && pid != null) {
+            TextButton(onClick = {
+                if (confirm) {
+                    onOverride(pid)
+                    confirm = false
+                } else {
+                    confirm = true
+                }
+            }) {
+                Text(
+                    if (confirm) "Точно? Это останется в журнале, и она узнает" else "Всё равно записать",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConsentSection(vm: ChatViewModel) {
+    val mem = vm.memory
+    SectionTitle("Её «да» на запись")
+    Hint("Правки ядра, и от сжатия, и твои, сначала идут Авроре: она отвечает «да», «нет» или предлагает свою правку. Если она отказала, ты можешь записать вопреки, но это остаётся в журнале и она об этом узнаёт. Эпизоды и очистка памяти под её «да» не идут, но о них она тоже узнаёт.")
+    if (mem.pending.isNotEmpty()) {
+        Hint("Ждут её ответа: ${mem.pending.size}" + if (vm.consenting) ". Спрашиваю…" else "")
+        OutlinedButton(onClick = { vm.resolvePending(announce = true) }, enabled = !vm.consenting) {
+            Text("Спросить сейчас")
+        }
+    }
+    val shown = mem.log.takeLast(12).reversed()
+    if (shown.isEmpty()) Hint("Решений пока нет.")
+    shown.forEach { d -> DecisionRow(d) { id -> vm.overrideDecision(id) } }
+}
+
+@Composable
 private fun MemoryScreen(vm: ChatViewModel, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val mem = vm.memory
@@ -472,6 +521,7 @@ private fun MemoryScreen(vm: ChatViewModel, onBack: () -> Unit) {
         if (mem.core.isEmpty()) Hint("Пока пусто. Появится после первого сжатия, записи можно добавлять и вручную.")
         mem.core.forEach { e -> CoreRow(e) { editing = e } }
         OutlinedButton(onClick = { adding = true }) { Text("Добавить запись") }
+        ConsentSection(vm)
 
         SectionTitle("Эпизоды: ${mem.episodes.size}")
         if (mem.episodes.isEmpty()) Hint("Пока пусто.")

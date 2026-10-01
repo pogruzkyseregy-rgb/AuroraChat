@@ -35,4 +35,6 @@ fun toPlainForMemory(text: String, stickers: List<CatalogItem>, photos: List<Cat
             "фото", "photo" -> "[фото из альбома: ${photos.firstOrNull { it.id == id }?.desc ?: id}]"
             else -> "[фото от Адониса]"
         }
-    }.trim()
+    }.let { PAUSE_RE.replace(it, " … ") }
+        .let { SILENCE_RE.replace(it, "[Аврора промолчала]") }
+        .trim()

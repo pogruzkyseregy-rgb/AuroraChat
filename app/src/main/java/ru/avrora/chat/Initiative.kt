@@ -239,7 +239,7 @@ object InitiativeEngine {
         val reply = try {
             AuroraApi.initiative(
                 prefs.serverUrl, prefs.token, history, MemoryContext.build(mem, recentUser), prefs.loadPersona().compile(),
-                reason, gapMin, localTime, unanswered, stickers, photos
+                reason, gapMin, localTime, unanswered, stickers, photos, limitLines(prefs, mem)
             )
         } catch (e: Exception) {
             return InitiativeOutcome.FAILED

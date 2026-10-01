@@ -11,6 +11,8 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+data class ConsentDecision(val n: Int, val verdict: String, val text: String, val why: String)
+
 object AuroraApi {
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -59,7 +61,9 @@ object AuroraApi {
         photos: List<CatalogItem>,
         memory: String,
         persona: String,
-        images: List<Pair<Int, String>> = emptyList()
+        images: List<Pair<Int, String>> = emptyList(),
+        limits: List<String> = emptyList(),
+        limitsChanged: List<String> = emptyList()
     ): String {
         val imgs = JSONArray()
         images.forEach { imgs.put(JSONObject().put("i", it.first).put("data", it.second)) }
@@ -70,6 +74,8 @@ object AuroraApi {
             .put("stickers", catalogJson(stickers))
             .put("photos", catalogJson(photos))
             .put("images", imgs)
+            .put("limits", JSONArray(limits))
+            .put("limits_changed", JSONArray(limitsChanged))
         return post(baseUrl, "/chat", token, body).getString("reply")
     }
 
@@ -108,10 +114,12 @@ object AuroraApi {
         localTime: String,
         unanswered: Int,
         stickers: List<CatalogItem>,
-        photos: List<CatalogItem>
+        photos: List<CatalogItem>,
+        limits: List<String> = emptyList()
     ): String? {
         val body = JSONObject()
             .put("messages", historyJson(history))
+            .put("limits", JSONArray(limits))
             .put("memory", memory)
             .put("persona", persona)
             .put("reason", reason)
@@ -124,5 +132,30 @@ object AuroraApi {
         if (res.optBoolean("skip", false)) return null
         val msg = res.optString("message", "").trim()
         return if (msg.isEmpty()) null else msg
+    }
+
+    /** Её решение по предложенным правкам ядра. Если решения нет, бросает исключение: пункты остаются в очереди. */
+    suspend fun consent(
+        baseUrl: String,
+        token: String,
+        core: List<CoreEntry>,
+        proposals: List<Proposal>,
+        episode: String
+    ): List<ConsentDecision> {
+        val coreArr = JSONArray()
+        core.forEach { coreArr.put(JSONObject().put("id", it.id).put("kind", it.kind).put("text", it.text)) }
+        val pArr = JSONArray()
+        proposals.forEachIndexed { i, p ->
+            pArr.put(
+                JSONObject().put("n", i).put("op", p.op).put("id", p.targetId)
+                    .put("kind", p.kind).put("text", p.text).put("source", p.source)
+            )
+        }
+        val res = post(baseUrl, "/consent", token, JSONObject().put("core", coreArr).put("proposals", pArr).put("episode", episode))
+        val arr = res.optJSONArray("decisions") ?: return emptyList()
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            ConsentDecision(o.optInt("n", -1), o.optString("verdict"), o.optString("text"), o.optString("why"))
+        }
     }
 }
