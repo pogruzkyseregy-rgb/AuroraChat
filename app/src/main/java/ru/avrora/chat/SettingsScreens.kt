@@ -51,6 +51,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -60,7 +66,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-enum class Screen { Chat, Menu, Connection, Persona, Memory, Initiative }
+enum class Screen { Chat, Menu, Connection, Persona, Memory, Initiative, Diary }
 
 /** Настройки поверх чата: чат под ними остаётся жить, поэтому набранный текст не теряется. */
 @Composable
@@ -77,6 +83,7 @@ fun SettingsHost(vm: ChatViewModel, screen: Screen, onNavigate: (Screen) -> Unit
             Screen.Persona -> PersonaScreen(vm) { onNavigate(Screen.Menu) }
             Screen.Memory -> MemoryScreen(vm) { onNavigate(Screen.Menu) }
             Screen.Initiative -> InitiativeScreen(vm) { onNavigate(Screen.Menu) }
+            Screen.Diary -> DiaryScreen(vm) { onNavigate(Screen.Menu) }
             Screen.Chat -> {}
         }
     }
@@ -230,6 +237,10 @@ private fun HourStepper(label: String, hour: Int, onChange: (Int) -> Unit) {
 
 @Composable
 private fun MenuScreen(vm: ChatViewModel, onNavigate: (Screen) -> Unit) {
+    val ctx = LocalContext.current
+    val version = remember {
+        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
+    }
     SettingsPage("Настройки", onBack = { onNavigate(Screen.Chat) }) {
         MenuRow(
             "Характер",
@@ -244,7 +255,16 @@ private fun MenuScreen(vm: ChatViewModel, onNavigate: (Screen) -> Unit) {
             "Инициатива",
             if (vm.initSettings.enabled) "Аврора может писать первой" else "выключена"
         ) { onNavigate(Screen.Initiative) }
+        MenuRow(
+            "Дневник Авроры",
+            when {
+                vm.diary.isNotEmpty() -> "записей: ${vm.diary.size}"
+                vm.diaryOn -> "начнёт писать после разговоров"
+                else -> "выключен"
+            }
+        ) { onNavigate(Screen.Diary) }
         MenuRow("Подключение", "сервер и токен") { onNavigate(Screen.Connection) }
+        Hint("Версия $version")
     }
 }
 
@@ -424,6 +444,78 @@ private fun CoreEditDialog(
             }
         }
     )
+}
+
+@Composable
+private fun DiaryScreen(vm: ChatViewModel, onBack: () -> Unit) {
+    var toDelete by remember { mutableStateOf<DiaryEntry?>(null) }
+    val fmt = remember { SimpleDateFormat("d MMMM, HH:mm", Locale("ru")) }
+    SettingsPage("Дневник Авроры", onBack = onBack) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(160.dp)
+                .clip(RoundedCornerShape(14.dp))
+        ) {
+            AsyncImage(
+                model = "file:///android_asset/diary_bg.webp",
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Night.copy(alpha = 0.9f))))
+            )
+            Text(
+                "Здесь Аврора записывает, о чём думала после ваших разговоров.",
+                color = TextMain,
+                fontSize = 14.sp,
+                lineHeight = 19.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(14.dp)
+            )
+        }
+        Hint("Запись создаётся раз в сутки, вечером или ночью, если был разговор. Приложение просит модель написать её по вашей переписке, это не фоновое «думание». Писать ли и что, решает Аврора. Записи видишь только ты, на этом телефоне. Незакрытое из них становится настоящим поводом написать тебе первой.")
+        SwitchRow(
+            "Вести дневник",
+            if (vm.diaryOn) "Аврора пишет раз в сутки" else "Выключен: она об этом знает",
+            vm.diaryOn
+        ) { vm.enableDiary(it) }
+        OutlinedButton(onClick = { vm.writeDiaryNow() }, enabled = !vm.writingDiary) {
+            Text(if (vm.writingDiary) "Аврора пишет…" else "Написать сейчас")
+        }
+        if (vm.diary.isEmpty()) Hint("Записей пока нет.")
+        vm.diary.reversed().forEach { e ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+            ) {
+                Text(fmt.format(Date(e.at)), color = Glow, fontSize = 12.sp)
+                Text(e.text, color = TextMain, fontSize = 15.sp, lineHeight = 22.sp)
+                if (e.open.isNotBlank()) {
+                    Text("Хотела сказать: " + e.open, color = TextDim, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                TextButton(onClick = { toDelete = e }) { Text("Удалить", color = TextDim) }
+            }
+        }
+    }
+    val del = toDelete
+    if (del != null) {
+        AlertDialog(
+            onDismissRequest = { toDelete = null },
+            containerColor = Panel,
+            title = { Text("Удалить запись?") },
+            text = { Text("Аврора узнает, что ты удалил запись.") },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteDiaryEntry(del.id); toDelete = null }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Отмена") } }
+        )
+    }
 }
 
 @Composable

@@ -302,6 +302,15 @@ class AppPrefs(ctx: Context) {
             .apply()
     }
 
+    // Дневник Авроры
+    var diaryEnabled: Boolean
+        get() = p.getBoolean("diary_enabled", true)
+        set(v) { p.edit().putBoolean("diary_enabled", v).apply() }
+
+    var diaryNextTry: Long
+        get() = p.getLong("diary_next_try", 0L)
+        set(v) { p.edit().putLong("diary_next_try", v).apply() }
+
     /** Список ограничений, который Аврора видела в последний раз: по нему считаем «что изменилось». */
     var limitsPrev: String?
         get() = p.getString("limits_prev", null)

@@ -238,7 +238,10 @@ object InitiativeEngine {
 
         val reply = try {
             AuroraApi.initiative(
-                prefs.serverUrl, prefs.token, history, MemoryContext.build(mem, recentUser), prefs.loadPersona().compile(),
+                prefs.serverUrl, prefs.token, history,
+                listOf(MemoryContext.build(mem, recentUser), diaryContext(DiaryStore(ctx).load()))
+                    .filter { it.isNotBlank() }.joinToString("\n\n"),
+                prefs.loadPersona().compile(),
                 reason, gapMin, localTime, unanswered, stickers, photos, limitLines(prefs, mem)
             )
         } catch (e: Exception) {

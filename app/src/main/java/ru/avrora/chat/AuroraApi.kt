@@ -11,6 +11,8 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+data class DiaryResult(val entry: String, val open: String)
+
 data class ConsentDecision(val n: Int, val verdict: String, val text: String, val why: String)
 
 object AuroraApi {
@@ -157,5 +159,28 @@ object AuroraApi {
             val o = arr.getJSONObject(i)
             ConsentDecision(o.optInt("n", -1), o.optString("verdict"), o.optString("text"), o.optString("why"))
         }
+    }
+
+    /** Запись в дневник. null означает, что она решила: писать нечего. */
+    suspend fun diary(
+        baseUrl: String,
+        token: String,
+        messages: List<Pair<String, String>>,
+        memory: String,
+        localTime: String,
+        limits: List<String>
+    ): DiaryResult? {
+        val arr = JSONArray()
+        messages.forEach { arr.put(JSONObject().put("role", it.first).put("content", it.second)) }
+        val body = JSONObject()
+            .put("messages", arr)
+            .put("memory", memory)
+            .put("local_time", localTime)
+            .put("limits", JSONArray(limits))
+        val res = post(baseUrl, "/diary", token, body)
+        if (res.optBoolean("skip", false)) return null
+        val entry = res.optString("entry", "").trim()
+        if (entry.isEmpty()) return null
+        return DiaryResult(entry, res.optString("open", "").trim())
     }
 }

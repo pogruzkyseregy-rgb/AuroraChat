@@ -9,6 +9,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import java.util.Locale
+import java.util.Date
+import java.text.SimpleDateFormat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -20,11 +23,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = AppPrefs(app)
     private val inbox = Inbox(app)
     private val memoryStore = MemoryStore(app)
+    private val appCtx: Application = app
+    private val diaryStore = DiaryStore(app)
     val library = Library(app)
 
     val messages = mutableStateListOf<ChatMessage>().apply { addAll(store.load()) }
     val stickers = mutableStateListOf<CatalogItem>()
     val photos = mutableStateListOf<CatalogItem>()
+    val diary = mutableStateListOf<DiaryEntry>().apply { addAll(diaryStore.load()) }
 
     var sending by mutableStateOf(false)
         private set
@@ -50,6 +56,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var consenting by mutableStateOf(false)
         private set
+    var diaryOn by mutableStateOf(prefs.diaryEnabled)
+        private set
+    var writingDiary by mutableStateOf(false)
+        private set
     var revealTime by mutableStateOf(0L)
         private set
     var probing by mutableStateOf(false)
@@ -68,6 +78,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         drainInbox()
         resolvePending()
         InitiativeScheduler.apply(app, initSettings.enabled)
+        DiaryScheduler.apply(app, diaryOn)
+        maybeWriteDiary()
         viewModelScope.launch { InboxBus.flow.collect { drainInbox() } }
     }
 
@@ -121,6 +133,69 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             messages.addAll(items)
             persist()
         }
+    }
+
+    // ---------- дневник ----------
+
+    /** Записи могла дописать фоновая проверка: перечитываем файл. */
+    fun reloadDiary() {
+        val fresh = diaryStore.load()
+        if (fresh.size != diary.size || fresh.lastOrNull()?.id != diary.lastOrNull()?.id) {
+            diary.clear()
+            diary.addAll(fresh)
+        }
+    }
+
+    fun enableDiary(on: Boolean) {
+        prefs.diaryEnabled = on
+        diaryOn = on
+        DiaryScheduler.apply(appCtx, on)
+    }
+
+    /** Фоновая попытка по правилам: раз в сутки вечером и если был разговор. Ничего не показывает. */
+    fun maybeWriteDiary() {
+        viewModelScope.launch {
+            try {
+                DiaryEngine.tick(appCtx, false)
+                reloadDiary()
+            } catch (e: Exception) {
+                // нет связи: попробуем позже
+            }
+        }
+    }
+
+    /** Кнопка «Написать сейчас»: правила времени не действуют, но писать ли, решает она. */
+    fun writeDiaryNow() {
+        if (writingDiary) return
+        writingDiary = true
+        viewModelScope.launch {
+            val outcome = try {
+                DiaryEngine.tick(appCtx, true)
+            } catch (e: Exception) {
+                DiaryOutcome.FAILED
+            }
+            reloadDiary()
+            notice = when (outcome) {
+                DiaryOutcome.WRITTEN -> "Аврора написала в дневник"
+                DiaryOutcome.SKIPPED -> "Аврора решила, что писать пока нечего"
+                DiaryOutcome.NO_NEW -> "С последней записи ты ей ничего не писал"
+                DiaryOutcome.NO_TOKEN -> "Укажи токен в настройках"
+                DiaryOutcome.FAILED -> "Не получилось: нет связи с сервером"
+                DiaryOutcome.NOT_NOW -> "Сейчас нельзя"
+            }
+            writingDiary = false
+        }
+    }
+
+    /** Удаление записи разрешено, но молча не бывает: Аврора узнаёт об этом из журнала. */
+    fun deleteDiaryEntry(id: String) {
+        val e = diary.firstOrNull { it.id == id } ?: return
+        val day = SimpleDateFormat("d MMMM", Locale("ru")).format(Date(e.at))
+        val list = diary.filter { it.id != id }
+        diaryStore.save(list)
+        diary.clear()
+        diary.addAll(list)
+        commitMemory(memory.copy(log = (memory.log + note("Адонис удалил твою запись в дневнике от $day")).takeLast(100)))
     }
 
     // ---------- отправка ----------
@@ -527,7 +602,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             .takeLast(HISTORY)
         val recentUser = messages.filter { it.role == "user" }.takeLast(3)
             .joinToString(" ") { TAG_RE.replace(it.content, " ") }
-        val mem = MemoryContext.build(memory, recentUser)
+        val mem = listOf(MemoryContext.build(memory, recentUser), diaryContext(diary.toList()))
+            .filter { it.isNotBlank() }.joinToString("\n\n")
         val per = persona.compile()
         val limits = limitLines(prefs, memory)
         val changed = limitsChanged(prefs.limitsPrev, limits)
@@ -554,6 +630,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 resolvePending()
+                maybeWriteDiary()
                 compress(keep = RAW_KEEP, threshold = TRIGGER, announce = false)
             } catch (e: Exception) {
                 error = e.message ?: "Нет связи с сервером"

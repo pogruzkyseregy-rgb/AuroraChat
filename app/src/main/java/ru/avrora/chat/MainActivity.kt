@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         // Забираем сообщения, которые Аврора написала в фоне, и убираем уведомление
         vm.drainInbox()
+        vm.reloadDiary()
         AuroraNotifications.clear(this)
     }
 }
